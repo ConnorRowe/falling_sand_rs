@@ -6,6 +6,7 @@ use coffee::input::{Input, keyboard, mouse};
 use coffee::load::{Join, loading_screen::ProgressBar, Task};
 use nalgebra::Vector2;
 use rand::*;
+use rayon::prelude::*;
 
 fn main() -> Result<()> {
     FallingSand::run(WindowSettings {
@@ -106,7 +107,7 @@ impl Strain {
         match self {
             Strain::Sand => 0,
             Strain::Water => 1,
-            _ => 0
+            _ => 2
         }
     }
 
@@ -115,6 +116,15 @@ impl Strain {
             Strain::Sand => 1600,
             Strain::Water => 1000,
             _ => 1000
+        }
+    }
+
+    fn to_str(&self) -> &'static str {
+        match self {
+            Strain::Empty => "Empty",
+            Strain::Sand => "Sand",
+            Strain::Water => "Water",
+            _ => ""
         }
     }
 }
@@ -132,6 +142,7 @@ struct FallingSand {
     mouse_buttons_pressed: HashSet<mouse::Button>,
     text_buffer: String,
     particles_updated: u64,
+    active_strain: Strain,
 }
 
 impl FallingSand {
@@ -151,6 +162,7 @@ impl FallingSand {
             mouse_buttons_pressed: HashSet::new(),
             text_buffer: String::with_capacity(Self::MAX_TEXTSIZE),
             particles_updated: 0,
+            active_strain: Strain::Sand,
         }
     }
 
@@ -334,8 +346,16 @@ impl Game for FallingSand {
         self.font.add(Text {
             content: &*format!("particles_updated={}", self.particles_updated),
             position: Point::new(20.0, 20.0),
-            size: 18.0,
+            size: 16.0,
             color: COLORS[0],
+            ..Text::default()
+        });
+
+        self.font.add(Text {
+            content: &*format!("active: {}", self.active_strain.to_str()),
+            position: Point::new(20., 36.),
+            size: 16.0,
+            color: COLORS[self.active_strain.to_colour_id() as usize],
             ..Text::default()
         });
 
@@ -369,16 +389,30 @@ impl Game for FallingSand {
 
     fn update(&mut self, _window: &Window)
     {
+        // Update current strain for mouse click
+        let x: Option<&keyboard::KeyCode> = self.keys_pressed.par_iter().find_first(|&&x| x == keyboard::KeyCode::E || x == keyboard::KeyCode::Key1 || x == keyboard::KeyCode::Key2);
+
+        if x != None
+        {
+            self.active_strain =
+                match x.unwrap() {
+                    keyboard::KeyCode::E => Strain::Empty,
+                    keyboard::KeyCode::Key1 => Strain::Sand,
+                    keyboard::KeyCode::Key2 => Strain::Water,
+                    _ => Strain::Sand
+                }
+        }
+
         // Spawn particle at mouse
         let left_down = self.mouse_buttons_pressed.contains(&mouse::Button::Left);
         let right_down = self.mouse_buttons_pressed.contains(&mouse::Button::Right);
 
-        if left_down || right_down {
+        if left_down {
             let x: usize = (self.cursor_position.x / 4.) as usize;
             let y: usize = (self.cursor_position.y / 4.) as usize;
 
             self.spawn_particle(x, y, Particle {
-                strain: if left_down { Strain::Sand } else { Strain::Water },
+                strain: self.active_strain,
                 update: false,
             })
         }
@@ -437,10 +471,11 @@ const COLORS: [Color; 7] = [
         b: 1.0,
         a: 1.0,
     },
+    // White
     Color {
-        r: 0.6,
-        g: 0.6,
-        b: 0.6,
+        r: 1.0,
+        g: 1.0,
+        b: 1.0,
         a: 1.0,
     },
     Color {
