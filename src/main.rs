@@ -109,6 +109,14 @@ impl Strain {
             _ => 0
         }
     }
+
+    fn density(&self) -> u16 {
+        match self {
+            Strain::Sand => 1600,
+            Strain::Water => 1000,
+            _ => 1000
+        }
+    }
 }
 
 struct FallingSand {
@@ -252,6 +260,25 @@ impl FallingSand {
         false
     }
 
+    fn apply_density(&mut self, x: usize, y: usize) -> bool {
+        if y + 1 < self.grid_height {
+            let cur = self.get(x, y);
+            let bel = self.get(x, y + 1);
+
+            // If the current particle's density is greater than the particle below's
+            if cur.strain.density() > bel.strain.density() {
+
+                // Swap
+                self.set(x, y, bel);
+                self.set(x, y + 1, cur);
+
+                return true;
+            }
+        }
+
+        false
+    }
+
     fn spawn_particle(&mut self, x: usize, y: usize, p: Particle) {
         if x < self.grid_width && y < self.grid_height {
             self.set(x, y, p);
@@ -373,11 +400,16 @@ impl Game for FallingSand {
 
                     // select particle update behaviour depending on its Strain
                     match p.strain {
-                        Strain::Sand => { self.apply_tumble(x, y); }
+                        Strain::Sand => {
+                            self.apply_tumble(x, y);
+                            self.apply_density(x, y);
+                        }
                         Strain::Water => {
                             if !self.apply_tumble(x, y) {
                                 self.apply_spread(x, y);
                             }
+
+                            self.apply_density(x, y);
                         }
                         _ => {}
                     }
