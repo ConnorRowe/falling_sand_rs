@@ -106,6 +106,8 @@ pub enum Strain {
     Water = 2,
     Wood = 3,
     Fire = 4,
+    Glass = 5,
+    MoltenGlass = 6,
 }
 
 impl Strain {
@@ -115,6 +117,8 @@ impl Strain {
             Strain::Water => 2,
             Strain::Wood => 3,
             Strain::Fire => 4,
+            Strain::Glass => 5,
+            Strain::MoltenGlass => 6,
             _ => 0,
         }
     }
@@ -125,6 +129,8 @@ impl Strain {
             Strain::Water => 1000,
             Strain::Wood => 9999,
             Strain::Fire => 600,
+            Strain::Glass => 9999,
+            Strain::MoltenGlass => 1600,
             _ => 1000,
         }
     }
@@ -136,6 +142,8 @@ impl Strain {
             Strain::Water => "Water",
             Strain::Wood => "Wood",
             Strain::Fire => "Fire",
+            Strain::Glass => "Glass",
+            Strain::MoltenGlass => "Molten Glass",
             _ => "",
         }
     }
@@ -146,6 +154,7 @@ impl Strain {
 
         match self {
             Strain::Fire => rng.gen_range(60, 100),
+            Strain::MoltenGlass => rng.gen_range(240, 480),
             _ => -1,
         }
     }
@@ -153,6 +162,7 @@ impl Strain {
     // what it turns into when it dies
     fn death_strain(&self) -> Strain {
         match self {
+            Strain::MoltenGlass => Strain::Glass,
             _ => Strain::Empty,
         }
     }
@@ -162,6 +172,16 @@ impl Strain {
         match self {
             Strain::Wood => 5,
             _ => 0,
+        }
+    }
+
+    fn reactable_strains(&self) -> Vec<(Strain, i8, Strain)> {
+        match self {
+            Strain::Sand => vec![(Strain::Fire, 1, Strain::MoltenGlass)],
+            Strain::MoltenGlass => vec![(Strain::Water, 50, Strain::Glass)],
+            Strain::Glass => vec![(Strain::Fire, 10, Strain::MoltenGlass)],
+
+            _ => vec![],
         }
     }
 }
@@ -404,7 +424,27 @@ impl Game for FallingSand {
         // add and then draw text
         self.font.add(Text {
             content: &*format!("particles_updated={}", self.particles_updated),
-            position: Point::new(8.0, 6.0),
+            position: Point::new(8.0, 2.0),
+            size: 16.0,
+            color: COLORS[0],
+            ..Text::default()
+        });
+
+        let cur = self.cursor_position;
+        let cur_x = (cur.x / 4.) as usize;
+        let cur_y = (cur.y / 4.) as usize;
+
+        let under_cur = if cur_x < self.grid_width && cur_y < self.grid_height {
+            self.get((cur.x / 4.) as usize, (cur.y / 4.) as usize)
+                .strain
+                .to_str()
+        } else {
+            "Empty"
+        };
+
+        self.font.add(Text {
+            content: &*format!("under cursor: {}", under_cur),
+            position: Point::new(8., 16.),
             size: 16.0,
             color: COLORS[0],
             ..Text::default()
@@ -412,7 +452,7 @@ impl Game for FallingSand {
 
         self.font.add(Text {
             content: &*format!("active: {}", self.active_strain.to_str()),
-            position: Point::new(8., 18.),
+            position: Point::new(8., 30.),
             size: 16.0,
             color: COLORS[self.active_strain.to_colour_id() as usize],
             ..Text::default()
@@ -486,7 +526,10 @@ impl Game for FallingSand {
                 let xp = (x as isize + v.x) as usize;
                 let yp = (y as isize + v.y) as usize;
 
-                if xp < self.grid_width && yp < self.grid_height {
+                if xp < self.grid_width
+                    && yp < self.grid_height
+                    && (self.is_particle_empty(xp, yp) || self.active_strain == Strain::Empty)
+                {
                     self.spawn_particle(
                         xp,
                         yp,
@@ -523,6 +566,26 @@ impl Game for FallingSand {
                     // decrease lifetime if needed
                     if p.lifetime > 0 {
                         p.lifetime -= 1;
+                    }
+
+                    // Attempt reaction
+                    for r in p.strain.reactable_strains().iter() {
+                        let itr = self.four_adj_particles;
+                        for v in itr.iter() {
+                            if ((x as isize + v.x) as usize) < self.grid_width
+                                && ((y as isize + v.y) as usize) < self.grid_height
+                            {
+                                let other = self
+                                    .get((x as isize + v.x) as usize, (y as isize + v.y) as usize);
+
+                                if other.strain == r.0 && thread_rng().gen_range(0, 100) <= r.1 {
+                                    // Reaction successful
+                                    p.strain = r.2;
+                                    p.lifetime = p.strain.base_lifetime();
+                                    break;
+                                }
+                            }
+                        }
                     }
 
                     // save state to grid
@@ -578,8 +641,19 @@ impl Game for FallingSand {
                                 }
                             }
                         }
+                        Strain::MoltenGlass => {
+                            if !self.apply_gravity(x, y, 1) {
+                                // Randomly dont move to appear thicker
+                                if random() {
+                                    if !self.apply_tumble(x, y) {
+                                        self.apply_spread(x, y);
+                                    }
+                                }
+                            }
+                        }
                         _ => {}
                     }
+
                     self.particles_updated += 1;
                 }
             }
@@ -627,16 +701,18 @@ const COLORS: [Color; 7] = [
         b: 0.0,
         a: 1.0,
     },
+    // Glass
     Color {
-        r: 0.9,
-        g: 0.9,
-        b: 0.9,
+        r: 0.85,
+        g: 0.85,
+        b: 0.85,
         a: 1.0,
     },
+    // Molten glass
     Color {
-        r: 0.8,
-        g: 0.8,
-        b: 1.0,
+        r: 1.0,
+        g: 0.498,
+        b: 0.3137,
         a: 1.0,
     },
 ];
