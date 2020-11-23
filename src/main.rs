@@ -85,6 +85,7 @@ impl Input for Inputs {
 pub struct Particle {
     strain: Strain,
     update: bool,
+    lifetime: i16,
 }
 
 impl Default for Particle {
@@ -92,6 +93,7 @@ impl Default for Particle {
         Particle {
             strain: Strain::Empty,
             update: false,
+            lifetime: -1,
         }
     }
 }
@@ -102,14 +104,18 @@ pub enum Strain {
     Empty = 0,
     Sand = 1,
     Water = 2,
+    Wood = 3,
+    Fire = 4,
 }
 
 impl Strain {
     fn to_colour_id(&self) -> u16 {
         match self {
-            Strain::Sand => 0,
-            Strain::Water => 1,
-            _ => 2,
+            Strain::Sand => 1,
+            Strain::Water => 2,
+            Strain::Wood => 3,
+            Strain::Fire => 4,
+            _ => 0,
         }
     }
 
@@ -117,6 +123,8 @@ impl Strain {
         match self {
             Strain::Sand => 1600,
             Strain::Water => 1000,
+            Strain::Wood => 9999,
+            Strain::Fire => 600,
             _ => 1000,
         }
     }
@@ -126,7 +134,34 @@ impl Strain {
             Strain::Empty => "Empty",
             Strain::Sand => "Sand",
             Strain::Water => "Water",
+            Strain::Wood => "Wood",
+            Strain::Fire => "Fire",
             _ => "",
+        }
+    }
+
+    // how long it survives in ticks
+    fn base_lifetime(&self) -> i16 {
+        let mut rng = rand::thread_rng();
+
+        match self {
+            Strain::Fire => rng.gen_range(60, 100),
+            _ => -1,
+        }
+    }
+
+    // what it turns into when it dies
+    fn death_strain(&self) -> Strain {
+        match self {
+            _ => Strain::Empty,
+        }
+    }
+
+    // out of 100
+    fn ignite_chance(&self) -> u8 {
+        match self {
+            Strain::Wood => 5,
+            _ => 0,
         }
     }
 }
@@ -145,6 +180,7 @@ struct FallingSand {
     text_buffer: String,
     particles_updated: u64,
     active_strain: Strain,
+    four_adj_particles: [Vector2<isize>; 4],
 }
 
 impl FallingSand {
@@ -165,6 +201,12 @@ impl FallingSand {
             text_buffer: String::with_capacity(Self::MAX_TEXTSIZE),
             particles_updated: 0,
             active_strain: Strain::Sand,
+            four_adj_particles: [
+                Vector2::new(-1, 0),
+                Vector2::new(1, 0),
+                Vector2::new(0, -1),
+                Vector2::new(0, 1),
+            ],
         }
     }
 
@@ -409,6 +451,8 @@ impl Game for FallingSand {
             x == keyboard::KeyCode::E
                 || x == keyboard::KeyCode::Key1
                 || x == keyboard::KeyCode::Key2
+                || x == keyboard::KeyCode::Key3
+                || x == keyboard::KeyCode::Key4
         });
 
         if x != None {
@@ -416,6 +460,8 @@ impl Game for FallingSand {
                 keyboard::KeyCode::E => Strain::Empty,
                 keyboard::KeyCode::Key1 => Strain::Sand,
                 keyboard::KeyCode::Key2 => Strain::Water,
+                keyboard::KeyCode::Key3 => Strain::Wood,
+                keyboard::KeyCode::Key4 => Strain::Fire,
                 _ => Strain::Sand,
             }
         }
@@ -428,14 +474,30 @@ impl Game for FallingSand {
             let x: usize = (self.cursor_position.x / 4.) as usize;
             let y: usize = (self.cursor_position.y / 4.) as usize;
 
-            self.spawn_particle(
-                x,
-                y,
-                Particle {
-                    strain: self.active_strain,
-                    update: false,
-                },
-            )
+            let points: Vec<Vector2<isize>> = vec![
+                Vector2::new(0, 0),
+                Vector2::new(-1, 0),
+                Vector2::new(1, 0),
+                Vector2::new(0, -1),
+                Vector2::new(0, 1),
+            ];
+
+            for v in points {
+                let xp = (x as isize + v.x) as usize;
+                let yp = (y as isize + v.y) as usize;
+
+                if xp < self.grid_width && yp < self.grid_height {
+                    self.spawn_particle(
+                        xp,
+                        yp,
+                        Particle {
+                            strain: self.active_strain,
+                            lifetime: self.active_strain.base_lifetime(),
+                            ..Default::default()
+                        },
+                    );
+                }
+            }
         }
 
         // Reset updated particles stat
@@ -446,11 +508,24 @@ impl Game for FallingSand {
             for x in 0..self.grid_width {
                 let mut p = self.get(x, y);
 
+                // check if dead
+                if p.lifetime == 0 {
+                    p.strain = p.strain.death_strain();
+                    p.lifetime = p.strain.base_lifetime();
+
+                    // save
+                    self.set(x, y, p);
+                }
                 // check the particle has not been updated this frame & ensure it isn't empty
-                if p.update == self.update && p.strain != Strain::Empty {
+                else if p.update == self.update && p.strain != Strain::Empty {
                     p.update = !p.update;
 
-                    // save update state to grid
+                    // decrease lifetime if needed
+                    if p.lifetime > 0 {
+                        p.lifetime -= 1;
+                    }
+
+                    // save state to grid
                     self.set(x, y, p);
 
                     // select particle update behaviour depending on its Strain
@@ -467,6 +542,42 @@ impl Game for FallingSand {
                                 }
                             }
                         }
+                        Strain::Fire => {
+                            if random() {
+                                self.apply_gravity(x, y, -1);
+                            }
+                            if random() {
+                                self.apply_spread(x, y);
+                            }
+
+                            // Attempt to ignite nearby particles
+                            let itr = self.four_adj_particles;
+                            for v in itr.iter() {
+                                if ((x as isize + v.x) as usize) < self.grid_width
+                                    && ((y as isize + v.y) as usize) < self.grid_height
+                                {
+                                    let mut p = self.get(
+                                        (x as isize + v.x) as usize,
+                                        (y as isize + v.y) as usize,
+                                    );
+
+                                    if p.strain != Strain::Empty && p.strain.ignite_chance() > 0 {
+                                        let mut rng = thread_rng();
+                                        if rng.gen_range(0, 100) <= p.strain.ignite_chance() {
+                                            p.strain = Strain::Fire;
+                                            p.lifetime = p.strain.base_lifetime();
+
+                                            self.set(
+                                                (x as isize + v.x) as usize,
+                                                (y as isize + v.y) as usize,
+                                                p,
+                                            );
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         _ => {}
                     }
                     self.particles_updated += 1;
@@ -476,9 +587,18 @@ impl Game for FallingSand {
 
         self.update = !self.update;
     }
+
+    const DEBUG_KEY: Option<keyboard::KeyCode> = Some(keyboard::KeyCode::F12);
 }
 
 const COLORS: [Color; 7] = [
+    // White
+    Color {
+        r: 1.0,
+        g: 1.0,
+        b: 1.0,
+        a: 1.0,
+    },
     // Sand
     Color {
         r: 1.0,
@@ -493,23 +613,18 @@ const COLORS: [Color; 7] = [
         b: 1.0,
         a: 1.0,
     },
-    // White
+    // Wood
+    Color {
+        r: 0.6274,
+        g: 0.3215,
+        b: 0.1647,
+        a: 1.0,
+    },
+    // Fire
     Color {
         r: 1.0,
-        g: 1.0,
-        b: 1.0,
-        a: 1.0,
-    },
-    Color {
-        r: 0.7,
-        g: 0.7,
-        b: 0.7,
-        a: 1.0,
-    },
-    Color {
-        r: 0.8,
-        g: 0.8,
-        b: 0.8,
+        g: 0.2705,
+        b: 0.0,
         a: 1.0,
     },
     Color {
