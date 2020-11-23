@@ -1,9 +1,11 @@
 use std::collections::HashSet;
 
-use coffee::{Game, input, Result, Timer};
-use coffee::graphics::{Batch, Color, Font, Frame, Image, Point, Rectangle, Sprite, Text, Window, WindowSettings};
-use coffee::input::{Input, keyboard, mouse};
-use coffee::load::{Join, loading_screen::ProgressBar, Task};
+use coffee::graphics::{
+    Batch, Color, Font, Frame, Image, Point, Rectangle, Sprite, Text, Window, WindowSettings,
+};
+use coffee::input::{keyboard, mouse, Input};
+use coffee::load::{loading_screen::ProgressBar, Join, Task};
+use coffee::{input, Game, Result, Timer};
 use nalgebra::Vector2;
 use rand::*;
 use rayon::prelude::*;
@@ -107,7 +109,7 @@ impl Strain {
         match self {
             Strain::Sand => 0,
             Strain::Water => 1,
-            _ => 2
+            _ => 2,
         }
     }
 
@@ -115,7 +117,7 @@ impl Strain {
         match self {
             Strain::Sand => 1600,
             Strain::Water => 1000,
-            _ => 1000
+            _ => 1000,
         }
     }
 
@@ -124,7 +126,7 @@ impl Strain {
             Strain::Empty => "Empty",
             Strain::Sand => "Sand",
             Strain::Water => "Water",
-            _ => ""
+            _ => "",
         }
     }
 }
@@ -169,9 +171,7 @@ impl FallingSand {
     fn load() -> Task<FallingSand> {
         (
             Task::using_gpu(|gpu| Image::from_colors(gpu, &COLORS)),
-            Font::load_from_bytes(include_bytes!(
-                "../resources/Gamepixies-8MO6n.ttf"
-            )),
+            Font::load_from_bytes(include_bytes!("../resources/Gamepixies-8MO6n.ttf")),
         )
             .join()
             .map(|(palette, font)| FallingSand::new(Batch::new(palette), font, 128, 128))
@@ -209,35 +209,56 @@ impl FallingSand {
         self.get(x, y).strain == Strain::Empty
     }
 
+    fn swap(&mut self, x1: usize, y1: usize, x2: usize, y2: usize) {
+        let cur: &Particle = &self.get(x1, y1);
+        let other: &Particle = &self.get(x2, y2);
+
+        self.set(x1, y1, *other);
+        self.set(x2, y2, *cur);
+    }
+
+    fn apply_gravity(&mut self, x: usize, y: usize, val: isize) -> bool {
+        if ((y as isize + val) <= 0) || (y as isize + val > self.grid_height as isize - 1) {
+            return false;
+        } else {
+            // Compare densities
+            let dx = self.get(x, y).strain.density();
+            let dy = self.get(x, (y as isize + val) as usize).strain.density();
+
+            if dx > dy || self.is_particle_empty(x, (y as isize + val) as usize) {
+                self.swap(x, y, x, (y as isize + val) as usize);
+
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     fn apply_tumble(&mut self, x: usize, y: usize) -> bool {
         let mut translate: Vector2<isize> = nalgebra::Vector2::new(0, 0);
 
         let &grid_height: &usize = &self.grid_height;
         let &grid_width: &usize = &self.grid_width;
 
-        if y + 1 < grid_height && self.is_particle_empty(x, y + 1)
-        {
-            // Move down
-            translate.y = 1;
-        } else if y + 1 < grid_height && x > 0 && self.is_particle_empty(x - 1, y + 1) {
-
+        if y + 1 < grid_height && x > 0 && self.is_particle_empty(x - 1, y + 1) {
             // Move down left
             translate.x = -1;
             translate.y = 1;
-        } else if y + 1 < grid_height && x + 1 < grid_width && self.is_particle_empty(x + 1, y + 1) {
+        } else if y + 1 < grid_height && x + 1 < grid_width && self.is_particle_empty(x + 1, y + 1)
+        {
             // Move down right
             translate.x = 1;
             translate.y = 1;
         }
 
         if translate.x != 0 || translate.y != 0 {
-            // Move particle
-            let p = self.get(x, y);
-
-            self.set((x as isize + translate.x) as usize, (y as isize + translate.y) as usize, p);
-
-            // Clear old cell
-            self.set(x, y, Particle::default());
+            self.swap(
+                x,
+                y,
+                (x as isize + translate.x) as usize,
+                (y as isize + translate.y) as usize,
+            );
 
             return true;
         }
@@ -251,20 +272,21 @@ impl FallingSand {
         let &grid_width: &usize = &self.grid_width;
 
         let dir: isize;
-        if random() { dir = -1; } else { dir = 1; }
+        if random() {
+            dir = -1;
+        } else {
+            dir = 1;
+        }
 
-        if x > 0 && (x as isize + dir < grid_width as isize) && self.is_particle_empty((x as isize + dir) as usize, y)
+        if x > 0
+            && (x as isize + dir < grid_width as isize)
+            && self.is_particle_empty((x as isize + dir) as usize, y)
         {
             trans_x = dir;
         }
 
         if trans_x != 0 {
-            // Move particle
-            let p = self.get(x, y);
-            self.set((x as isize + trans_x) as usize, y, p);
-
-            // Clear old cell
-            self.set(x, y, Particle::default());
+            self.swap(x, y, (x as isize + trans_x) as usize, y);
 
             return true;
         }
@@ -279,10 +301,7 @@ impl FallingSand {
 
             // If the current particle's density is greater than the particle below's
             if cur.strain.density() > bel.strain.density() {
-
-                // Swap
-                self.set(x, y, bel);
-                self.set(x, y + 1, cur);
+                self.swap(x, y, x, y + 1);
 
                 return true;
             }
@@ -322,19 +341,17 @@ impl Game for FallingSand {
         for x in 0..self.grid_width {
             for y in 0..self.grid_height {
                 let p = self.get(x as usize, y as usize);
-                if p.strain != Strain::Empty
-                {
-                    self.batch.add(
-                        Sprite {
-                            source: Rectangle {
-                                x: p.strain.to_colour_id(),
-                                y: 0,
-                                width: 1,
-                                height: 1,
-                            },
-                            position: Point::new(x as f32 * scale, y as f32 * scale),
-                            scale: (1.0 * scale, 1.0 * scale),
-                        });
+                if p.strain != Strain::Empty {
+                    self.batch.add(Sprite {
+                        source: Rectangle {
+                            x: p.strain.to_colour_id(),
+                            y: 0,
+                            width: 1,
+                            height: 1,
+                        },
+                        position: Point::new(x as f32 * scale, y as f32 * scale),
+                        scale: (1.0 * scale, 1.0 * scale),
+                    });
                 }
             }
         }
@@ -345,7 +362,7 @@ impl Game for FallingSand {
         // add and then draw text
         self.font.add(Text {
             content: &*format!("particles_updated={}", self.particles_updated),
-            position: Point::new(20.0, 20.0),
+            position: Point::new(8.0, 6.0),
             size: 16.0,
             color: COLORS[0],
             ..Text::default()
@@ -353,7 +370,7 @@ impl Game for FallingSand {
 
         self.font.add(Text {
             content: &*format!("active: {}", self.active_strain.to_str()),
-            position: Point::new(20., 36.),
+            position: Point::new(8., 18.),
             size: 16.0,
             color: COLORS[self.active_strain.to_colour_id() as usize],
             ..Text::default()
@@ -377,8 +394,7 @@ impl Game for FallingSand {
                         self.text_buffer.pop();
                     }
                     _ => {
-                        if self.text_buffer.chars().count() < Self::MAX_TEXTSIZE
-                        {
+                        if self.text_buffer.chars().count() < Self::MAX_TEXTSIZE {
                             self.text_buffer.push_str(&input.text_buffer);
                         }
                     }
@@ -387,20 +403,21 @@ impl Game for FallingSand {
         }
     }
 
-    fn update(&mut self, _window: &Window)
-    {
+    fn update(&mut self, _window: &Window) {
         // Update current strain for mouse click
-        let x: Option<&keyboard::KeyCode> = self.keys_pressed.par_iter().find_first(|&&x| x == keyboard::KeyCode::E || x == keyboard::KeyCode::Key1 || x == keyboard::KeyCode::Key2);
+        let x: Option<&keyboard::KeyCode> = self.keys_pressed.par_iter().find_first(|&&x| {
+            x == keyboard::KeyCode::E
+                || x == keyboard::KeyCode::Key1
+                || x == keyboard::KeyCode::Key2
+        });
 
-        if x != None
-        {
-            self.active_strain =
-                match x.unwrap() {
-                    keyboard::KeyCode::E => Strain::Empty,
-                    keyboard::KeyCode::Key1 => Strain::Sand,
-                    keyboard::KeyCode::Key2 => Strain::Water,
-                    _ => Strain::Sand
-                }
+        if x != None {
+            self.active_strain = match x.unwrap() {
+                keyboard::KeyCode::E => Strain::Empty,
+                keyboard::KeyCode::Key1 => Strain::Sand,
+                keyboard::KeyCode::Key2 => Strain::Water,
+                _ => Strain::Sand,
+            }
         }
 
         // Spawn particle at mouse
@@ -411,10 +428,14 @@ impl Game for FallingSand {
             let x: usize = (self.cursor_position.x / 4.) as usize;
             let y: usize = (self.cursor_position.y / 4.) as usize;
 
-            self.spawn_particle(x, y, Particle {
-                strain: self.active_strain,
-                update: false,
-            })
+            self.spawn_particle(
+                x,
+                y,
+                Particle {
+                    strain: self.active_strain,
+                    update: false,
+                },
+            )
         }
 
         // Reset updated particles stat
@@ -435,15 +456,16 @@ impl Game for FallingSand {
                     // select particle update behaviour depending on its Strain
                     match p.strain {
                         Strain::Sand => {
-                            self.apply_tumble(x, y);
-                            self.apply_density(x, y);
+                            if !self.apply_gravity(x, y, 1) {
+                                self.apply_tumble(x, y);
+                            }
                         }
                         Strain::Water => {
-                            if !self.apply_tumble(x, y) {
-                                self.apply_spread(x, y);
+                            if !self.apply_gravity(x, y, 1) {
+                                if !self.apply_tumble(x, y) {
+                                    self.apply_spread(x, y);
+                                }
                             }
-
-                            self.apply_density(x, y);
                         }
                         _ => {}
                     }
