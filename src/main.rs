@@ -12,7 +12,7 @@ use rayon::prelude::*;
 
 fn main() -> Result<()> {
     FallingSand::run(WindowSettings {
-        title: String::from("Falling Sand - Coffee"),
+        title: String::from("Falling Sand - brewed with Coffee!"),
         size: (512, 512),
         resizable: false,
         fullscreen: false,
@@ -107,7 +107,11 @@ pub enum Strain {
     Wood = 3,
     Fire = 4,
     Glass = 5,
-    MoltenGlass = 6,
+    GlassMolten = 6,
+    OilCrude = 7,
+    Ash = 8,
+    AshBurning = 9,
+    WoodHot = 10,
 }
 
 impl Strain {
@@ -118,7 +122,11 @@ impl Strain {
             Strain::Wood => 3,
             Strain::Fire => 4,
             Strain::Glass => 5,
-            Strain::MoltenGlass => 6,
+            Strain::GlassMolten => 6,
+            Strain::OilCrude => 7,
+            Strain::Ash => 8,
+            Strain::AshBurning => 9,
+            Strain::WoodHot => 10,
             _ => 0,
         }
     }
@@ -130,7 +138,11 @@ impl Strain {
             Strain::Wood => 9999,
             Strain::Fire => 600,
             Strain::Glass => 9999,
-            Strain::MoltenGlass => 1600,
+            Strain::GlassMolten => 1600,
+            Strain::OilCrude => 930,
+            Strain::Ash => 1600,
+            Strain::AshBurning => 1600,
+            Strain::WoodHot => 9999,
             _ => 1000,
         }
     }
@@ -143,7 +155,11 @@ impl Strain {
             Strain::Wood => "Wood",
             Strain::Fire => "Fire",
             Strain::Glass => "Glass",
-            Strain::MoltenGlass => "Molten Glass",
+            Strain::GlassMolten => "Molten Glass",
+            Strain::OilCrude => "Crude Oil",
+            Strain::Ash => "Ash",
+            Strain::AshBurning => "Embers",
+            Strain::WoodHot => "Burning Wood",
             _ => "",
         }
     }
@@ -154,7 +170,9 @@ impl Strain {
 
         match self {
             Strain::Fire => rng.gen_range(60, 100),
-            Strain::MoltenGlass => rng.gen_range(240, 480),
+            Strain::GlassMolten => rng.gen_range(240, 480),
+            Strain::AshBurning => rng.gen_range(120, 360),
+            Strain::WoodHot => rng.gen_range(120, 240),
             _ => -1,
         }
     }
@@ -162,7 +180,10 @@ impl Strain {
     // what it turns into when it dies
     fn death_strain(&self) -> Strain {
         match self {
-            Strain::MoltenGlass => Strain::Glass,
+            Strain::GlassMolten => Strain::Glass,
+            Strain::Wood => Strain::WoodHot,
+            Strain::WoodHot => Strain::AshBurning,
+            Strain::AshBurning => Strain::Ash,
             _ => Strain::Empty,
         }
     }
@@ -171,15 +192,26 @@ impl Strain {
     fn ignite_chance(&self) -> u8 {
         match self {
             Strain::Wood => 5,
+            Strain::OilCrude => 2,
             _ => 0,
+        }
+    }
+
+    // can it ignite particles around it?
+    fn can_ignite_others(&self) -> bool {
+        match self {
+            Strain::Fire => true,
+            Strain::AshBurning => true,
+            Strain::WoodHot => true,
+            _ => false,
         }
     }
 
     fn reactable_strains(&self) -> Vec<(Strain, i8, Strain)> {
         match self {
-            Strain::Sand => vec![(Strain::Fire, 1, Strain::MoltenGlass)],
-            Strain::MoltenGlass => vec![(Strain::Water, 50, Strain::Glass)],
-            Strain::Glass => vec![(Strain::Fire, 10, Strain::MoltenGlass)],
+            Strain::Sand => vec![(Strain::Fire, 1, Strain::GlassMolten)],
+            Strain::GlassMolten => vec![(Strain::Water, 50, Strain::Glass)],
+            Strain::Glass => vec![(Strain::Fire, 10, Strain::GlassMolten)],
 
             _ => vec![],
         }
@@ -493,6 +525,7 @@ impl Game for FallingSand {
                 || x == keyboard::KeyCode::Key2
                 || x == keyboard::KeyCode::Key3
                 || x == keyboard::KeyCode::Key4
+                || x == keyboard::KeyCode::Key5
         });
 
         if x != None {
@@ -502,6 +535,7 @@ impl Game for FallingSand {
                 keyboard::KeyCode::Key2 => Strain::Water,
                 keyboard::KeyCode::Key3 => Strain::Wood,
                 keyboard::KeyCode::Key4 => Strain::Fire,
+                keyboard::KeyCode::Key5 => Strain::OilCrude,
                 _ => Strain::Sand,
             }
         }
@@ -591,9 +625,42 @@ impl Game for FallingSand {
                     // save state to grid
                     self.set(x, y, p);
 
+                    let mut rng = rand::thread_rng();
+
+                    // Attempt to ignite nearby particles
+                    if p.strain.can_ignite_others() {
+                        let itr = self.four_adj_particles;
+                        for v in itr.iter() {
+                            if ((x as isize + v.x) as usize) < self.grid_width
+                                && ((y as isize + v.y) as usize) < self.grid_height
+                            {
+                                let mut p = self
+                                    .get((x as isize + v.x) as usize, (y as isize + v.y) as usize);
+
+                                if p.strain != Strain::Empty && p.strain.ignite_chance() > 0 {
+                                    if rng.gen_range(0, 100) <= p.strain.ignite_chance() {
+                                        p.strain = if p.strain.death_strain() == Strain::Empty {
+                                            Strain::Fire
+                                        } else {
+                                            p.strain.death_strain()
+                                        };
+                                        p.lifetime = p.strain.base_lifetime();
+
+                                        self.set(
+                                            (x as isize + v.x) as usize,
+                                            (y as isize + v.y) as usize,
+                                            p,
+                                        );
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // select particle update behaviour depending on its Strain
                     match p.strain {
-                        Strain::Sand => {
+                        Strain::Sand | Strain::Ash | Strain::AshBurning => {
                             if !self.apply_gravity(x, y, 1) {
                                 self.apply_tumble(x, y);
                             }
@@ -612,36 +679,8 @@ impl Game for FallingSand {
                             if random() {
                                 self.apply_spread(x, y);
                             }
-
-                            // Attempt to ignite nearby particles
-                            let itr = self.four_adj_particles;
-                            for v in itr.iter() {
-                                if ((x as isize + v.x) as usize) < self.grid_width
-                                    && ((y as isize + v.y) as usize) < self.grid_height
-                                {
-                                    let mut p = self.get(
-                                        (x as isize + v.x) as usize,
-                                        (y as isize + v.y) as usize,
-                                    );
-
-                                    if p.strain != Strain::Empty && p.strain.ignite_chance() > 0 {
-                                        let mut rng = thread_rng();
-                                        if rng.gen_range(0, 100) <= p.strain.ignite_chance() {
-                                            p.strain = Strain::Fire;
-                                            p.lifetime = p.strain.base_lifetime();
-
-                                            self.set(
-                                                (x as isize + v.x) as usize,
-                                                (y as isize + v.y) as usize,
-                                                p,
-                                            );
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
                         }
-                        Strain::MoltenGlass => {
+                        Strain::GlassMolten => {
                             if !self.apply_gravity(x, y, 1) {
                                 // Randomly dont move to appear thicker
                                 if random() {
@@ -651,6 +690,17 @@ impl Game for FallingSand {
                                 }
                             }
                         }
+                        Strain::OilCrude => {
+                            if !self.apply_gravity(x, y, 1) {
+                                // Randomly dont move to appear thicker
+                                if rng.gen_range(0, 100) <= 25 {
+                                    if !self.apply_tumble(x, y) {
+                                        self.apply_spread(x, y);
+                                    }
+                                }
+                            }
+                        }
+
                         _ => {}
                     }
 
@@ -665,7 +715,7 @@ impl Game for FallingSand {
     const DEBUG_KEY: Option<keyboard::KeyCode> = Some(keyboard::KeyCode::F12);
 }
 
-const COLORS: [Color; 7] = [
+const COLORS: [Color; 11] = [
     // White
     Color {
         r: 1.0,
@@ -713,6 +763,34 @@ const COLORS: [Color; 7] = [
         r: 1.0,
         g: 0.498,
         b: 0.3137,
+        a: 1.0,
+    },
+    // Oil
+    Color {
+        r: 0.0666,
+        g: 0.0627,
+        b: 0.047,
+        a: 1.0,
+    },
+    // Ash
+    Color {
+        r: 0.819,
+        g: 0.819,
+        b: 0.819,
+        a: 1.0,
+    },
+    // AshBurning
+    Color {
+        r: 0.964,
+        g: 0.435,
+        b: 0.247,
+        a: 1.0,
+    },
+    // WoodBurning
+    Color {
+        r: 0.819,
+        g: 0.309,
+        b: 0.0,
         a: 1.0,
     },
 ];
