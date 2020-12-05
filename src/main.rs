@@ -216,6 +216,15 @@ impl Strain {
             _ => vec![],
         }
     }
+
+    // what strain (if any) does this strain generate above it, and what is that probability out of 100? ei. burning wood can make fire
+    fn emits_above(&self) -> (Strain, u8) {
+        match self {
+            Strain::WoodHot => (Strain::Fire, 2),
+
+            _ => (Strain::Empty, 0),
+        }
+    }
 }
 
 struct FallingSand {
@@ -656,6 +665,21 @@ impl Game for FallingSand {
                                 }
                             }
                         }
+                    }
+
+                    let emit_above = p.strain.emits_above();
+
+                    // Attempt to emit from above
+                    if emit_above.0 != Strain::Empty
+                        && rng.gen_range(0, 100) <= emit_above.1
+                        && ((y as isize) - 1 > 0 && self.is_particle_empty(x, y - 1))
+                    {
+                        let above = Particle {
+                            strain: emit_above.0,
+                            update: p.update,
+                            lifetime: emit_above.0.base_lifetime(),
+                        };
+                        self.set(x, y - 1, above);
                     }
 
                     // select particle update behaviour depending on its Strain
